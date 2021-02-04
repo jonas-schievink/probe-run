@@ -410,8 +410,7 @@ fn notmain() -> Result<i32, anyhow::Error> {
         table = None;
     }
 
-    // Print a separator before the device messages start.
-    eprintln!("{}", "─".repeat(80).dimmed());
+    print_separator();
 
     // wait for breakpoint
     let stdout = io::stdout();
@@ -706,6 +705,7 @@ fn backtrace(
     let mut frame_index = 0;
     let mut registers = Registers::new(lr, sp, core);
     let symtab = elf.symbol_map();
+    print_separator();
     println!("stack backtrace:");
     loop {
         let frames = addr2line.find_frames(pc as u64)?.collect::<Vec<_>>()?;
@@ -884,6 +884,11 @@ fn print_chips() -> Result<i32, anyhow::Error> {
     }
 
     Ok(0)
+}
+
+/// Print a separator before the device messages start.
+fn print_separator() {
+    eprintln!("{}", "─".repeat(80).dimmed());
 }
 
 #[derive(Debug)]
