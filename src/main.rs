@@ -105,9 +105,13 @@ struct Opts {
     /// Prints version information
     #[structopt(short = "V", long)]
     version: bool,
+
+    #[structopt(long, env = "PROBE_RUN_BACKTRACE")]
+    force_backtrace: Option<String>,
 }
 
 fn notmain() -> Result<i32, anyhow::Error> {
+
     let opts: Opts = Opts::from_args();
     defmt_logger::init(opts.verbose);
 
@@ -504,6 +508,8 @@ fn notmain() -> Result<i32, anyhow::Error> {
         core.halt(TIMEOUT)?;
     }
 
+    // TODO move into own function?
+    let mut canary_touched = false;
     if let Some((addr, len)) = canary {
         let mut buf = vec![0; len as usize];
         core.read_8(addr as u32, &mut buf)?;
@@ -518,6 +524,7 @@ fn notmain() -> Result<i32, anyhow::Error> {
                 may be corrupted due to stack overflow",
                 min_stack_usage,
             );
+            canary_touched = true;
         } else {
             log::debug!("stack canary intact");
         }
@@ -527,17 +534,36 @@ fn notmain() -> Result<i32, anyhow::Error> {
 
     let debug_frame = debug_frame.ok_or_else(|| anyhow!("`.debug_frame` section not found"))?;
 
-    // print backtrace
-    let top_exception = backtrace(
-        &mut core,
-        pc,
-        debug_frame,
-        &elf,
-        &vector_table,
-        &sp_ram_region,
-        &live_functions,
-        &current_dir,
-    )?;
+    let mut top_exception = None;
+
+    print_separator();
+
+    let force_backtrace = match opts.force_backtrace.as_deref() {
+        Some("False") | Some("0") | Some("false") | None => false,
+        _ => true
+    };
+    // print backtrace if necessary
+    // TODO cover crash case
+    if canary_touched || force_backtrace {
+        top_exception = backtrace(
+            &mut core,
+            pc,
+            debug_frame,
+            &elf,
+            &vector_table,
+            &sp_ram_region,
+            &live_functions,
+            &current_dir,
+        )?;
+    } else if was_halted {
+        let mut re_run_args = "PROBE_RUN_BACKTRACE=1 probe-run".to_string();
+        for arg in std::env::args().skip(1) {
+            re_run_args = format!("{} {}", re_run_args, arg);
+        }
+
+        log::info!("device halted; exiting. To see the backtrace at the exit point repeat this run \
+                   with \n`{}`", re_run_args);
+    }
 
     core.reset_and_halt(TIMEOUT)?;
 
@@ -705,7 +731,7 @@ fn backtrace(
     let mut frame_index = 0;
     let mut registers = Registers::new(lr, sp, core);
     let symtab = elf.symbol_map();
-    print_separator();
+
     println!("stack backtrace:");
     loop {
         let frames = addr2line.find_frames(pc as u64)?.collect::<Vec<_>>()?;
