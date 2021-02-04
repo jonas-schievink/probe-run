@@ -538,12 +538,12 @@ fn notmain() -> Result<i32, anyhow::Error> {
 
     print_separator();
 
+    // print backtrace if necessary
+    // TODO cover crash case
     let force_backtrace = match opts.force_backtrace.as_deref() {
         Some("False") | Some("0") | Some("false") | None => false,
         _ => true
     };
-    // print backtrace if necessary
-    // TODO cover crash case
     if canary_touched || force_backtrace {
         top_exception = backtrace(
             &mut core,
@@ -568,11 +568,7 @@ fn notmain() -> Result<i32, anyhow::Error> {
     core.reset_and_halt(TIMEOUT)?;
 
     Ok(
-        if let Some(TopException::HardFault { stack_overflow }) = top_exception {
-            if stack_overflow {
-                log::error!("the program has overflowed its stack");
-            }
-
+        if let Some(TopException::HardFault { _ }) = top_exception {
             SIGABRT
         } else {
             0
@@ -800,17 +796,19 @@ fn backtrace(
             top_exception = Some(if pc & !THUMB_BIT == vector_table.hard_fault & !THUMB_BIT {
                 // HardFaultTrampoline
 
-                let stack_overflow = if let Some(sp_ram_region) = sp_ram_region {
+                let mut stack_overflow = false;
+                if let Some(sp_ram_region) = sp_ram_region {
                     // NOTE stack is full descending; meaning the stack pointer can be `ORIGIN(RAM) +
                     // LENGTH(RAM)`
                     let range = sp_ram_region.range.start..=sp_ram_region.range.end;
-                    !range.contains(&sp)
+                    stack_overflow = !range.contains(&sp);
+                    if stack_overflow {
+                        log::error!("the program has overflowed its stack");
+                    }
                 } else {
                     log::warn!(
                         "no RAM region appears to contain the stack; cannot determine if this was a stack overflow"
                     );
-
-                    false
                 };
 
                 TopException::HardFault { stack_overflow }
