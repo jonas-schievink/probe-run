@@ -534,8 +534,6 @@ fn notmain() -> Result<i32, anyhow::Error> {
 
     let debug_frame = debug_frame.ok_or_else(|| anyhow!("`.debug_frame` section not found"))?;
 
-    let mut top_exception = None;
-
     print_separator();
 
     // print backtrace if necessary
@@ -544,8 +542,8 @@ fn notmain() -> Result<i32, anyhow::Error> {
         Some("False") | Some("0") | Some("false") | None => false,
         _ => true
     };
-    if canary_touched || force_backtrace {
-        top_exception = backtrace(
+
+    let top_exception = construct_backtrace(
             &mut core,
             pc,
             debug_frame,
@@ -554,23 +552,25 @@ fn notmain() -> Result<i32, anyhow::Error> {
             &sp_ram_region,
             &live_functions,
             &current_dir,
+            (force_backtrace || canary_touched)
         )?;
-    } else if was_halted {
-        let mut re_run_args = "PROBE_RUN_BACKTRACE=1 probe-run".to_string();
-        for arg in std::env::args().skip(1) {
-            re_run_args = format!("{} {}", re_run_args, arg);
-        }
-
-        log::info!("device halted; exiting. To see the backtrace at the exit point repeat this run \
-                   with \n`{}`", re_run_args);
-    }
 
     core.reset_and_halt(TIMEOUT)?;
 
     Ok(
-        if let Some(TopException::HardFault { _ }) = top_exception {
+        if let Some(TopException::HardFault { stack_overflow: true }) = top_exception {
             SIGABRT
         } else {
+            if !force_backtrace {
+                let mut re_run_args = "PROBE_RUN_BACKTRACE=1 probe-run".to_string();
+                for arg in std::env::args().skip(1) {
+                    re_run_args = format!("{} {}", re_run_args, arg);
+                }
+
+                log::info!("device halted; exiting. To see the backtrace at the exit point repeat this run \
+                           with \n`{}`", re_run_args);
+            }
+
             0
         },
     )
@@ -701,7 +701,7 @@ impl<'c, 'probe> Registers<'c, 'probe> {
     }
 }
 
-fn backtrace(
+fn construct_backtrace(
     core: &mut Core<'_>,
     mut pc: u32,
     debug_frame: &[u8],
@@ -710,6 +710,7 @@ fn backtrace(
     sp_ram_region: &Option<RamRegion>,
     live_functions: &HashSet<&str>,
     current_dir: &Path,
+    print_backtrace: bool
 ) -> Result<Option<TopException>, anyhow::Error> {
     let mut debug_frame = DebugFrame::new(debug_frame, LittleEndian);
     // 32-bit ARM -- this defaults to the host's address size which is likely going to be 8
@@ -747,46 +748,48 @@ fn backtrace(
             false
         };
 
-        if has_valid_debuginfo {
-            for frame in &frames {
-                let name = frame
-                    .function
-                    .as_ref()
-                    .map(|function| function.demangle())
-                    .transpose()?
-                    .unwrap_or(Cow::Borrowed("???"));
+        if print_backtrace {
+            if has_valid_debuginfo {
+                for frame in &frames {
+                    let name = frame
+                        .function
+                        .as_ref()
+                        .map(|function| function.demangle())
+                        .transpose()?
+                        .unwrap_or(Cow::Borrowed("???"));
 
+                    println!("{:>4}: {}", frame_index, name);
+                    frame_index += 1;
+
+                    if let Some((file, line)) = frame
+                        .location
+                        .as_ref()
+                        .and_then(|loc| loc.file.and_then(|file| loc.line.map(|line| (file, line))))
+                    {
+                        let file = Path::new(file);
+                        let relpath = if let Ok(relpath) = file.strip_prefix(&current_dir) {
+                            relpath
+                        } else {
+                            // not within current directory; use full path
+                            file
+                        };
+                        println!("        at {}:{}", relpath.display(), line);
+                    }
+                }
+            } else {
+                // .symtab fallback
+                // the .symtab appears to use address ranges that have their thumb bits set (e.g.
+                // `0x101..0x200`). Passing the `pc` with the thumb bit cleared (e.g. `0x100`) to the
+                // lookup function sometimes returns the *previous* symbol. Work around the issue by
+                // setting `pc`'s thumb bit before looking it up
+                let address = (pc | THUMB_BIT) as u64;
+                let name = symtab
+                    .get(address)
+                    .and_then(|symbol| symbol.name())
+                    .unwrap_or("???");
                 println!("{:>4}: {}", frame_index, name);
                 frame_index += 1;
-
-                if let Some((file, line)) = frame
-                    .location
-                    .as_ref()
-                    .and_then(|loc| loc.file.and_then(|file| loc.line.map(|line| (file, line))))
-                {
-                    let file = Path::new(file);
-                    let relpath = if let Ok(relpath) = file.strip_prefix(&current_dir) {
-                        relpath
-                    } else {
-                        // not within current directory; use full path
-                        file
-                    };
-                    println!("        at {}:{}", relpath.display(), line);
-                }
             }
-        } else {
-            // .symtab fallback
-            // the .symtab appears to use address ranges that have their thumb bits set (e.g.
-            // `0x101..0x200`). Passing the `pc` with the thumb bit cleared (e.g. `0x100`) to the
-            // lookup function sometimes returns the *previous* symbol. Work around the issue by
-            // setting `pc`'s thumb bit before looking it up
-            let address = (pc | THUMB_BIT) as u64;
-            let name = symtab
-                .get(address)
-                .and_then(|symbol| symbol.name())
-                .unwrap_or("???");
-            println!("{:>4}: {}", frame_index, name);
-            frame_index += 1;
         }
 
         // on hard fault exception entry we hit the breakpoint before the subroutine prelude (`push
@@ -831,7 +834,9 @@ fn backtrace(
         }
 
         let lr = registers.get(LR)?;
-        log::debug!("lr=0x{:08x} pc=0x{:08x}", lr, pc);
+        //if print_backtrace {
+            log::debug!("lr=0x{:08x} pc=0x{:08x}", lr, pc);
+        //}
         if lr == LR_END {
             break;
         }
