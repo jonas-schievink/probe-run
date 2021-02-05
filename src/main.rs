@@ -559,6 +559,8 @@ fn notmain() -> Result<i32, anyhow::Error> {
 
     Ok(
         if let Some(TopException::HardFault { stack_overflow: true }) = top_exception {
+            log::error!("the program has overflowed its stack");
+
             SIGABRT
         } else {
             if !force_backtrace {
@@ -725,11 +727,11 @@ fn construct_backtrace(
 
     let addr2line = addr2line::Context::new(elf)?;
     let mut top_exception = None;
+    let mut stack_overflow = false;
     let mut frame_index = 0;
     let mut registers = Registers::new(lr, sp, core);
     let symtab = elf.symbol_map();
 
-    println!("stack backtrace:");
     loop {
         let frames = addr2line.find_frames(pc as u64)?.collect::<Vec<_>>()?;
         // when the input of `find_frames` is the PC of a subroutine that has no debug information
@@ -748,48 +750,48 @@ fn construct_backtrace(
             false
         };
 
-        if print_backtrace {
-            if has_valid_debuginfo {
-                for frame in &frames {
-                    let name = frame
-                        .function
-                        .as_ref()
-                        .map(|function| function.demangle())
-                        .transpose()?
-                        .unwrap_or(Cow::Borrowed("???"));
+        let mut display_str = "".to_string();
 
-                    println!("{:>4}: {}", frame_index, name);
-                    frame_index += 1;
+        if has_valid_debuginfo {
+            for frame in &frames {
+                let name = frame
+                    .function
+                    .as_ref()
+                    .map(|function| function.demangle())
+                    .transpose()?
+                    .unwrap_or(Cow::Borrowed("???"));
 
-                    if let Some((file, line)) = frame
-                        .location
-                        .as_ref()
-                        .and_then(|loc| loc.file.and_then(|file| loc.line.map(|line| (file, line))))
-                    {
-                        let file = Path::new(file);
-                        let relpath = if let Ok(relpath) = file.strip_prefix(&current_dir) {
-                            relpath
-                        } else {
-                            // not within current directory; use full path
-                            file
-                        };
-                        println!("        at {}:{}", relpath.display(), line);
-                    }
-                }
-            } else {
-                // .symtab fallback
-                // the .symtab appears to use address ranges that have their thumb bits set (e.g.
-                // `0x101..0x200`). Passing the `pc` with the thumb bit cleared (e.g. `0x100`) to the
-                // lookup function sometimes returns the *previous* symbol. Work around the issue by
-                // setting `pc`'s thumb bit before looking it up
-                let address = (pc | THUMB_BIT) as u64;
-                let name = symtab
-                    .get(address)
-                    .and_then(|symbol| symbol.name())
-                    .unwrap_or("???");
-                println!("{:>4}: {}", frame_index, name);
+                display_str = format!("{}{:>4}: {}\n", display_str, frame_index, name);
                 frame_index += 1;
+
+                if let Some((file, line)) = frame
+                    .location
+                    .as_ref()
+                    .and_then(|loc| loc.file.and_then(|file| loc.line.map(|line| (file, line))))
+                {
+                    let file = Path::new(file);
+                    let relpath = if let Ok(relpath) = file.strip_prefix(&current_dir) {
+                        relpath
+                    } else {
+                        // not within current directory; use full path
+                        file
+                    };
+                    display_str = format!("{}        at {}:{}\n", display_str, relpath.display(), line);
+                }
             }
+        } else {
+            // .symtab fallback
+            // the .symtab appears to use address ranges that have their thumb bits set (e.g.
+            // `0x101..0x200`). Passing the `pc` with the thumb bit cleared (e.g. `0x100`) to the
+            // lookup function sometimes returns the *previous* symbol. Work around the issue by
+            // setting `pc`'s thumb bit before looking it up
+            let address = (pc | THUMB_BIT) as u64;
+            let name = symtab
+                .get(address)
+                .and_then(|symbol| symbol.name())
+                .unwrap_or("???");
+            display_str = format!("{}{:>4}: {}\n", display_str, frame_index, name);
+            frame_index += 1;
         }
 
         // on hard fault exception entry we hit the breakpoint before the subroutine prelude (`push
@@ -799,15 +801,12 @@ fn construct_backtrace(
             top_exception = Some(if pc & !THUMB_BIT == vector_table.hard_fault & !THUMB_BIT {
                 // HardFaultTrampoline
 
-                let mut stack_overflow = false;
+                println!("stack backtrace:");
                 if let Some(sp_ram_region) = sp_ram_region {
                     // NOTE stack is full descending; meaning the stack pointer can be `ORIGIN(RAM) +
                     // LENGTH(RAM)`
                     let range = sp_ram_region.range.start..=sp_ram_region.range.end;
                     stack_overflow = !range.contains(&sp);
-                    if stack_overflow {
-                        log::error!("the program has overflowed its stack");
-                    }
                 } else {
                     log::warn!(
                         "no RAM region appears to contain the stack; cannot determine if this was a stack overflow"
@@ -816,9 +815,19 @@ fn construct_backtrace(
 
                 TopException::HardFault { stack_overflow }
             } else {
+                if print_backtrace {
+                    println!("stack backtrace:");
+                }
+
                 TopException::Other
             });
         }
+
+        if print_backtrace || stack_overflow {
+            print!("{}", display_str);
+        }
+
+        // TODO from here on check var stack_overflow when printing!
 
         let uwt_row = debug_frame.unwind_info_for_address(bases, ctx, pc.into(), DebugFrame::cie_from_offset).with_context(|| {
             "debug information is missing. Likely fixes:
