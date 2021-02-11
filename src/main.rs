@@ -750,7 +750,7 @@ fn construct_backtrace(
             false
         };
 
-        let mut display_str = "".to_string();
+        let mut backtrace_display_str = "".to_string();
 
         if has_valid_debuginfo {
             for frame in &frames {
@@ -761,7 +761,7 @@ fn construct_backtrace(
                     .transpose()?
                     .unwrap_or(Cow::Borrowed("???"));
 
-                display_str = format!("{}{:>4}: {}\n", display_str, frame_index, name);
+                backtrace_display_str = format!("{}{:>4}: {}\n", backtrace_display_str, frame_index, name);
                 frame_index += 1;
 
                 if let Some((file, line)) = frame
@@ -776,10 +776,12 @@ fn construct_backtrace(
                         // not within current directory; use full path
                         file
                     };
-                    display_str = format!("{}        at {}:{}\n", display_str, relpath.display(), line);
+                    backtrace_display_str = format!("{}        at {}:{}", backtrace_display_str, relpath.display(), line);
                 }
             }
         } else {
+            // TODO: why is 0: HardFaultTrampoline printed twice all of a sudden
+
             // .symtab fallback
             // the .symtab appears to use address ranges that have their thumb bits set (e.g.
             // `0x101..0x200`). Passing the `pc` with the thumb bit cleared (e.g. `0x100`) to the
@@ -790,7 +792,7 @@ fn construct_backtrace(
                 .get(address)
                 .and_then(|symbol| symbol.name())
                 .unwrap_or("???");
-            display_str = format!("{}{:>4}: {}\n", display_str, frame_index, name);
+            backtrace_display_str = format!("{}{:>4}: {}\n", backtrace_display_str, frame_index, name);
             frame_index += 1;
         }
 
@@ -801,7 +803,7 @@ fn construct_backtrace(
             top_exception = Some(if pc & !THUMB_BIT == vector_table.hard_fault & !THUMB_BIT {
                 // HardFaultTrampoline
 
-                println!("stack backtrace:");
+                println!("stack backtrace:\n{}", backtrace_display_str);
                 if let Some(sp_ram_region) = sp_ram_region {
                     // NOTE stack is full descending; meaning the stack pointer can be `ORIGIN(RAM) +
                     // LENGTH(RAM)`
@@ -816,7 +818,7 @@ fn construct_backtrace(
                 TopException::HardFault { stack_overflow }
             } else {
                 if print_backtrace {
-                    println!("stack backtrace:");
+                    println!("stack backtrace:\n{}", backtrace_display_str);
                 }
 
                 TopException::Other
@@ -824,7 +826,7 @@ fn construct_backtrace(
         }
 
         if print_backtrace || stack_overflow {
-            print!("{}", display_str);
+            print!("{}", backtrace_display_str);
         }
 
         // TODO from here on check var stack_overflow when printing!
