@@ -552,7 +552,7 @@ fn notmain() -> Result<i32, anyhow::Error> {
             &sp_ram_region,
             &live_functions,
             &current_dir,
-            (force_backtrace || canary_touched)
+            force_backtrace || canary_touched
         )?;
 
     core.reset_and_halt(TIMEOUT)?;
@@ -780,8 +780,6 @@ fn construct_backtrace(
                 }
             }
         } else {
-            // TODO: why is 0: HardFaultTrampoline printed twice all of a sudden
-
             // .symtab fallback
             // the .symtab appears to use address ranges that have their thumb bits set (e.g.
             // `0x101..0x200`). Passing the `pc` with the thumb bit cleared (e.g. `0x100`) to the
@@ -796,14 +794,15 @@ fn construct_backtrace(
             frame_index += 1;
         }
 
-        // on hard fault exception entry we hit the breakpoint before the subroutine prelude (`push
-        // lr`) is executed so special handling is required
-        // also note that hard fault will always be the first frame we unwind
+        // This is our first run through the loop, some initial handling and printing is required
         if top_exception.is_none() {
             top_exception = Some(if pc & !THUMB_BIT == vector_table.hard_fault & !THUMB_BIT {
                 // HardFaultTrampoline
+                // on hard fault exception entry we hit the breakpoint before the subroutine prelude (`push
+                // lr`) is executed so special handling is required
+                // also note that hard fault will always be the first frame we unwind
 
-                println!("stack backtrace:\n{}", backtrace_display_str);
+                println!("stack backtrace:\n");
                 if let Some(sp_ram_region) = sp_ram_region {
                     // NOTE stack is full descending; meaning the stack pointer can be `ORIGIN(RAM) +
                     // LENGTH(RAM)`
@@ -818,7 +817,7 @@ fn construct_backtrace(
                 TopException::HardFault { stack_overflow }
             } else {
                 if print_backtrace {
-                    println!("stack backtrace:\n{}", backtrace_display_str);
+                    println!("stack backtrace:\n"); // TODO print bold?
                 }
 
                 TopException::Other
