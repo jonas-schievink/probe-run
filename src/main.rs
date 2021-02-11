@@ -536,7 +536,7 @@ fn notmain() -> Result<i32, anyhow::Error> {
 
     print_separator();
 
-    // print backtrace if necessary
+    // check if the user enforced a backtrace print
     // TODO cover crash case
     let force_backtrace = match opts.force_backtrace.as_deref() {
         Some("False") | Some("0") | Some("false") | None => false,
@@ -830,8 +830,6 @@ fn construct_backtrace(
         if print_backtrace {
             print!("{}", backtrace_display_str);
         }
-
-        // TODO from here on check var stack_overflow when printing!
 
         let uwt_row = debug_frame.unwind_info_for_address(bases, ctx, pc.into(), DebugFrame::cie_from_offset).with_context(|| {
             "debug information is missing. Likely fixes:
