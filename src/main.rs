@@ -552,6 +552,7 @@ fn notmain() -> Result<i32, anyhow::Error> {
             &sp_ram_region,
             &live_functions,
             &current_dir,
+            // TODO any other cases in which we should force a backtrace?
             force_backtrace || canary_touched
         )?;
 
@@ -712,7 +713,7 @@ fn construct_backtrace(
     sp_ram_region: &Option<RamRegion>,
     live_functions: &HashSet<&str>,
     current_dir: &Path,
-    print_backtrace: bool
+    force_backtrace: bool
 ) -> Result<Option<TopException>, anyhow::Error> {
     let mut debug_frame = DebugFrame::new(debug_frame, LittleEndian);
     // 32-bit ARM -- this defaults to the host's address size which is likely going to be 8
@@ -802,7 +803,7 @@ fn construct_backtrace(
                 // lr`) is executed so special handling is required
                 // also note that hard fault will always be the first frame we unwind
 
-                println!("stack backtrace:\n");
+                print_backtrace_start();
                 if let Some(sp_ram_region) = sp_ram_region {
                     // NOTE stack is full descending; meaning the stack pointer can be `ORIGIN(RAM) +
                     // LENGTH(RAM)`
@@ -816,15 +817,17 @@ fn construct_backtrace(
 
                 TopException::HardFault { stack_overflow }
             } else {
-                if print_backtrace {
-                    println!("stack backtrace:\n"); // TODO print bold?
+                if force_backtrace {
+                    print_backtrace_start();
                 }
 
                 TopException::Other
             });
         }
 
-        if print_backtrace || stack_overflow {
+        let print_backtrace = force_backtrace || stack_overflow;
+
+        if print_backtrace {
             print!("{}", backtrace_display_str);
         }
 
@@ -844,9 +847,9 @@ fn construct_backtrace(
         }
 
         let lr = registers.get(LR)?;
-        //if print_backtrace {
+        if print_backtrace {
             log::debug!("lr=0x{:08x} pc=0x{:08x}", lr, pc);
-        //}
+        }
         if lr == LR_END {
             break;
         }
@@ -928,6 +931,10 @@ fn print_chips() -> Result<i32, anyhow::Error> {
 /// Print a separator before the device messages start.
 fn print_separator() {
     eprintln!("{}", "─".repeat(80).dimmed());
+}
+
+fn print_backtrace_start() {
+    println!("{}", "stack backtrace:".dimmed());
 }
 
 #[derive(Debug)]
