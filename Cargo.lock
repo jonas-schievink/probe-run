@@ -157,7 +157,8 @@ dependencies = [
 [[package]]
 name = "defmt-decoder"
 version = "0.2.0"
-source = "git+https://github.com/knurling-rs/defmt?tag=defmt-decoder-v0.2.0#60c6447f8ecbc4ff023378ba6905bcd0de1e679f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "05a05ed80b0191909325d49d38cb9ed24231e1127a9af2fe217d203fd78b9ab3"
 dependencies = [
  "ansi_term 0.12.1",
  "anyhow",
@@ -178,7 +179,8 @@ dependencies = [
 [[package]]
 name = "defmt-parser"
 version = "0.2.0"
-source = "git+https://github.com/knurling-rs/defmt?tag=defmt-decoder-v0.2.0#60c6447f8ecbc4ff023378ba6905bcd0de1e679f"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c816f778ec2147f95990a606795fe9dcc82781bcd98e222675c4103c2d250ea1"
 
 [[package]]
 name = "difference"
