@@ -525,6 +525,7 @@ dependencies = [
  "object",
  "probe-rs",
  "probe-rs-rtt",
+ "rusb",
  "rustc-demangle",
  "signal-hook",
  "structopt",
